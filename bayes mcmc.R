@@ -103,13 +103,15 @@ log_linear_model <- function(yvals, xvals, b, b0, t) {
   return(postsample)
 }
 
-n <- 2000
+n <- 5000
 x <- runif(n, -10, 30)
-b <- 27
+z <- runif(n, -30, -12)
+b1 <- 27
+b2 <- 0.04
 a <- -2
-y <- b*x + a + rnorm(n, 0, 2)
+y <- b1*x + b2*z + a + rnorm(n, 0, 1)
 
-lm(y~x, tibble(y,x))
+lm(y~x+z, tibble(y,x,z))
 
 metromc_spec <- function(k, type=list('norm', 't', 'exp'), params=NA, 
                          intercept_prior=function(x){rnorm(x,0,)}
@@ -168,14 +170,38 @@ metromc_spec <- function(k, type=list('norm', 't', 'exp'), params=NA,
 auto_metromc_spec <- function(data) {
   # data is a table with dependent variables in first column
   # data doesn't contain column of '1's for intercept
+  
+  data <- tibble(y,x,z)
+  
   k <- ncol(data) - 1 # number of independent variables
   n <- nrow(data) # number of datapoints
-  data[,k+2] <- rep(1,n) # adding row of ones for doing analysis
+  red.n <- floor(n/4) #reduced n
+  
+  fixed.data <- data[1:red.n,] %>% mutate("intercept" = rep(1,red.n)) # adding row of ones for doing analysis
   
   priors <- list()
-  for (i in seq(k+1)) {
-    var.cor <- cor()
+  for (i in seq(k)) {
+    paired.data <- fixed.data[,c(1,i+1)]
+    lin.form <- paste0(names(paired.data)[1],"~",names(paired.data)[2])
+    lin.m <- lm(lin.form, paired.data)
+    beta.guess <- lin.m$coefficients[2]
+    beta.g.var <- (sum(lin.m$residuals^2)/(red.n - (k+1))) / sum(paired.data[,2]^2)
+    
+    print(beta.guess)
+    #print(beta.g.var)
+    
+    #need to fix this problem right here!!!
+    new.prior <- function(x) {
+      rnorm(x, beta.guess, sqrt(beta.g.var))
+    }
+    
+    priors <- append(priors, new.prior)
   }
+  priors
+  p1 <- priors[[1]]
+  p1(10)
+  p2 <- priors[[2]]
+  p2(10)
 }
 
 metromc <- function(data, mmc_spec, iter = 2000, burn = 500) {
