@@ -172,14 +172,20 @@ auto_metromc_spec <- function(data) {
   # data doesn't contain column of '1's for intercept
   
   data <- tibble(y,x,z)
-  
   k <- ncol(data) - 1 # number of independent variables
   n <- nrow(data) # number of datapoints
   red.n <- floor(n/4) #reduced n
-  
   fixed.data <- data[1:red.n,] %>% mutate("intercept" = rep(1,red.n)) # adding row of ones for doing analysis
   
   priors <- list()
+  new.prior <- function(x) {force(x); function(z) rnorm(z, x[1], sqrt(x[2]))}
+  prior.means <- c()
+  
+  #getting summary stats for usage in error priors
+  lean.y <- unlist(fixed.data[,1]) #for finding intercept later
+  #y.mean <- mean(y)
+  y.var <- var(lean.y)
+  
   for (i in seq(k)) {
     paired.data <- fixed.data[,c(1,i+1)]
     lin.form <- paste0(names(paired.data)[1],"~",names(paired.data)[2])
@@ -187,21 +193,28 @@ auto_metromc_spec <- function(data) {
     beta.guess <- lin.m$coefficients[2]
     beta.g.var <- (sum(lin.m$residuals^2)/(red.n - (k+1))) / sum(paired.data[,2]^2)
     
-    print(beta.guess)
+    #print(beta.guess)
     #print(beta.g.var)
+    prior.means <- c(prior.means, beta.guess)
+    lean.y <- lean.y - (beta.guess * unlist(fixed.data[,i+1]))
     
     #need to fix this problem right here!!!
-    new.prior <- function(x) {
-      rnorm(x, beta.guess, sqrt(beta.g.var))
-    }
     
-    priors <- append(priors, new.prior)
+    
+    priors <- append(priors, new.prior(c(beta.guess, 100*beta.g.var))) #go for vague priors
   }
+  intercept.guess <- mean(lean.y)
+  variance.guess <-  var(lean.y)
+  df.guess <- 2*variance.guess/(variance.guess-1)
+  
+  intercept.prior <- new.prior(c(intercept.guess, 100*variance.guess))
+  priors <- append(priors, intercept.prior)
+  
+  precision.prior <- function(n) rgamma(n, 1/(5*y.var), 5)
+  priors <- append(priors, precision.prior)
+  
+  names(priors) <- c(paste0(""))
   priors
-  p1 <- priors[[1]]
-  p1(10)
-  p2 <- priors[[2]]
-  p2(10)
 }
 
 metromc <- function(data, mmc_spec, iter = 2000, burn = 500) {
