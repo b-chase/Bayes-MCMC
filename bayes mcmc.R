@@ -171,14 +171,25 @@ auto_metromc_spec <- function(data) {
   # data is a table with dependent variables in first column
   # data doesn't contain column of '1's for intercept
   
-  data <- tibble(y,x,z)
+  #data <- tibble(y,x,z)
   k <- ncol(data) - 1 # number of independent variables
   n <- nrow(data) # number of datapoints
   red.n <- floor(n/4) #reduced n
-  fixed.data <- data[1:red.n,] %>% mutate("intercept" = rep(1,red.n)) # adding row of ones for doing analysis
+  y.data <- data[1:red.n, 1]
+  x.data <- data[1:red.n, 2:(k+1)]
   
   priors <- list()
   new.prior <- function(x) {force(x); function(z) rnorm(z, x[1], sqrt(x[2]))}
+  priors <- apply(x.data, 2, function(x) {function() 
+    rnorm(1, cov(y.data, x)/var(x), 
+          10*sqrt(var(y.data)*var(x)))})
+  
+  priors
+  par(mfcol=c(2,1))
+  hist(sapply(seq(200),function(z) priors$x()))
+  hist(sapply(seq(200),function(z) priors$z()))
+  
+  priors$z()
   prior.means <- c()
   
   #getting summary stats for usage in error priors
