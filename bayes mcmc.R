@@ -195,25 +195,27 @@ auto_metromc_spec <- function(data) {
     
     #print(beta.guess)
     #print(beta.g.var)
-    prior.means <- c(prior.means, beta.guess)
+    proposal.means <- c(proposal.means, beta.guess)
     lean.y <- lean.y - (beta.guess * unlist(fixed.data[,i+1]))
     
     #need to fix this problem right here!!!
     
     
-    priors <- append(priors, new.prior(c(beta.guess, 100*beta.g.var))) #go for vague priors
+    proposals <- append(proposals, new.proposal(c(beta.guess, 100*beta.g.var))) #go for vague proposals
   }
   intercept.guess <- mean(lean.y)
   variance.guess <-  var(lean.y)
   df.guess <- 2*variance.guess/(variance.guess-1)
   
-  intercept.prior <- new.prior(c(intercept.guess, 100*variance.guess))
-  priors <- append(priors, intercept.prior)
+  intercept.proposal <- new.proposal(c(intercept.guess, 100*variance.guess))
+  proposals <- append(proposals, "alpha"=intercept.proposal)
   
-  precision.prior <- function(n) rgamma(n, 1/(5*y.var), 5)
-  priors <- append(priors, precision.prior)
+  precision.proposal <- function(n) rgamma(n, 1/(5*y.var), 5)
+  proposals <- append(proposals, "tau"=precision.proposal)
   
-  names(priors) <- c(paste0(""))
+  err.prior <- function(z, df) dt(z, df)
+  proposals <- append(proposals, "err.dist"=err.prior)
+  
   priors
 }
 
