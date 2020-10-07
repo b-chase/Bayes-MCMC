@@ -1,5 +1,129 @@
 require(tidyverse)
 
+n <- 5000
+x <- runif(n, -10, 30)
+z <- runif(n, -30, -12)
+b1 <- 27
+b1.alt <- -5
+b2 <- 0.04
+a <- -2
+
+prob.fail <- 0.0
+y <- ifelse(runif(n)>prob.fail,b1*x,b1.alt*x) + b2*z + a + rnorm(n, 0, 1)
+
+data <- tibble(y,x,z)
+
+lm(y~x+z, data)
+
+metro_mc <- function(data, iter = 2000, burn = 500, starting=NULL, proposals="rwalk", priors="vague") {
+  # data is a table with dependent variable in first column
+  # mmc_spec is a list of two functions, priors and LH
+  # prior is a function for drawing potential values of the parameters
+  # LH is the likehood, a function that gives p density for a given error
+  # iter is number of MC steps to take
+  # burn is burn-in, number of initial steps to ignore
+  
+  k <- ncol(data) #n-1 independent variables plus a constant
+  
+  if (is.null(starting)) {starting <- c(rep(0,k), 0.1)}
+  names(starting) <- c(names(data[,2:k]), "tau")
+  
+  if (proposals == "rwalk") {
+    proposals <- sapply(seq(k), function(t) function(old) {old+rnorm(1)})
+    proposals <- append(proposals, rexp(1,5)) # last one is for the precision, tau
+  }
+  names(proposals) <- names(starting)
+  
+  if (priors == "vague") {priors <- sapply(seq(k+1), function(z) function(t) {1/(1+sqrt(abs(t)))})}
+  names(priors) <- names(starting)
+  
+  data <- mutate(data, const.=rep(1,nrow(data))) #necessary for next step
+  print(ncol(data))
+  likelihood <- function(inputs, params, prior.pdf) {
+    L <- 1 # 100% probability to start
+    k <- length(params) - 1
+    tau <- params[k+1]
+    print(tau)
+    for (j in seq(k)) {
+      L <- L * prior.pdf[[j]](params[j]) #multiple by prior
+    }
+    for (j in seq(10)) {
+      
+      deviate <- inputs[j,1] - params[1:k] %*% as.numeric(inputs[j,2:(k+1)])
+      print(rnorm(deviate, 0, 1/sqrt(tau)))
+    }
+  }
+  
+  #let's chain
+  for (i in seq(iter)) {
+    
+  }
+  likelihood(data, starting, priors)
+  #priors
+}
+
+metro_mc(data)
+
+
+auto_metromc_spec <- function(data) {
+  # data is a table with dependent variables in first column
+  # data doesn't contain column of '1's for intercept
+  
+  data <- tibble(y,x,z)
+  k <- ncol(data) - 1 # number of independent variables
+  n <- nrow(data) # number of datapoints
+  red.n <- floor(n/4) #reduced n
+  y.data <- data[1:red.n, 1]
+  x.data <- data[1:red.n, 2:(k+1)]
+  
+  proposals <- list()
+  new.prior <- function(x) {force(x); function(z) rnorm(z, x[1], sqrt(x[2]))}
+  
+  prior.means <- c()
+  
+  #getting summary stats for usage in error priors
+  lean.y <- unlist(fixed.data[,1]) #for finding intercept later
+  #y.mean <- mean(y)
+  y.var <- var(lean.y)
+  
+  for (i in seq(k)) {
+    paired.data <- fixed.data[,c(1,i+1)]
+    lin.form <- paste0(names(paired.data)[1],"~",names(paired.data)[2])
+    lin.m <- lm(lin.form, paired.data)
+    beta.guess <- lin.m$coefficients[2]
+    beta.g.var <- (sum(lin.m$residuals^2)/(red.n - (k+1))) / sum(paired.data[,2]^2)
+    
+    #print(beta.guess)
+    #print(beta.g.var)
+    proposal.means <- c(proposal.means, beta.guess)
+    lean.y <- lean.y - (beta.guess * unlist(fixed.data[,i+1]))
+    
+    #need to fix this problem right here!!!
+    
+    
+    proposals <- append(proposals, new.proposal(c(beta.guess, 100*beta.g.var))) #go for vague proposals
+  }
+  intercept.guess <- mean(lean.y)
+  variance.guess <-  var(lean.y)
+  df.guess <- 2*variance.guess/(variance.guess-1)
+  
+  intercept.proposal <- new.proposal(c(intercept.guess, 100*variance.guess))
+  proposals <- append(proposals, "alpha"=intercept.proposal)
+  
+  precision.proposal <- function(n) rgamma(n, 1/(5*y.var), 5)
+  proposals <- append(proposals, "tau"=precision.proposal)
+  
+  err.prior <- function(z, df) dt(z, df)
+  proposals <- append(proposals, "err.dist"=err.prior)
+  
+  priors
+}
+
+
+
+post_approx <- function() {}
+
+
 linear_model <- function(yvals, xvals, b, b0, t) {
   #print("likelihood")
   #print(as.matrix(b))
@@ -102,142 +226,3 @@ log_linear_model <- function(yvals, xvals, b, b0, t) {
   
   return(postsample)
 }
-
-n <- 5000
-x <- runif(n, -10, 30)
-z <- runif(n, -30, -12)
-b1 <- 27
-b2 <- 0.04
-a <- -2
-y <- b1*x + b2*z + a + rnorm(n, 0, 1)
-
-lm(y~x+z, tibble(y,x,z))
-
-metromc_spec <- function(k, type=list('norm', 't', 'exp'), params=NA, 
-                         intercept_prior=function(x){rnorm(x,0,)}
-                         err_type=c('norm', 't', 'exp'), tau0=0.1) {
-  # Specify priors and likelihood for doing metropolis algorithm MCMC
-  # k is number of independent variables, not including intercept
-  # params is a list of vectors containing parameters for each prior dist
-  # (mean, sd) for norm, (df, ncp) for t, ()
-  # tau0 is the initial value of the precision
-  
-  #defining priors
-  priors <- list()
-  for (i in seq(k+1)) {
-    if (type[i]=='norm') {
-      if (is.NA(params)) {
-        mean <- 0
-        sd <- 1
-      }
-      else {
-        mean <- params[[i]][1]
-        sd <- params[[i]][2]
-      }
-      priors <- append(priors, function(x) {rnorm(x, mean, sd)})
-    }
-    if (type[i]=='t') {
-      if (is.NA(params)) {
-        df <- 5
-        ncp <- 0
-      }
-      else {
-        df <- params[[i]][1]
-        ncp <- params[[i]][2]
-      }
-      priors <- append(priors, function(x) {rt(x, df, ncp)})
-    }
-    if (type[i]=='exp') {
-      if (is.NA(params)) {
-        rate <- 1
-      }
-      else {
-        rate <- params[[i]][1]
-      }
-      priors <- append(priors, function(x) {rexp(x, rate)})
-    }
-  }
-  
-  priors <- append(priors, intercept_prior) #intercept prior
-  
-  if (err_type=='norm') {
-    priors <- append(priors, function(x) {rgamma(x, 1)}) #tau prior, eventually replace
-    LHfunc <- function(x, t) {dnorm(x, 0, 1/t)}
-  }
-  return(list(priors, LHfunc))
-}
-
-auto_metromc_spec <- function(data) {
-  # data is a table with dependent variables in first column
-  # data doesn't contain column of '1's for intercept
-  
-  #data <- tibble(y,x,z)
-  k <- ncol(data) - 1 # number of independent variables
-  n <- nrow(data) # number of datapoints
-  red.n <- floor(n/4) #reduced n
-  y.data <- data[1:red.n, 1]
-  x.data <- data[1:red.n, 2:(k+1)]
-  
-  priors <- list()
-  new.prior <- function(x) {force(x); function(z) rnorm(z, x[1], sqrt(x[2]))}
-  priors <- apply(x.data, 2, function(x) {function() 
-    rnorm(1, cov(y.data, x)/var(x), 
-          10*sqrt(var(y.data)*var(x)))})
-  
-  priors
-  par(mfcol=c(2,1))
-  hist(sapply(seq(200),function(z) priors$x()))
-  hist(sapply(seq(200),function(z) priors$z()))
-  
-  priors$z()
-  prior.means <- c()
-  
-  #getting summary stats for usage in error priors
-  lean.y <- unlist(fixed.data[,1]) #for finding intercept later
-  #y.mean <- mean(y)
-  y.var <- var(lean.y)
-  
-  for (i in seq(k)) {
-    paired.data <- fixed.data[,c(1,i+1)]
-    lin.form <- paste0(names(paired.data)[1],"~",names(paired.data)[2])
-    lin.m <- lm(lin.form, paired.data)
-    beta.guess <- lin.m$coefficients[2]
-    beta.g.var <- (sum(lin.m$residuals^2)/(red.n - (k+1))) / sum(paired.data[,2]^2)
-    
-    #print(beta.guess)
-    #print(beta.g.var)
-    proposal.means <- c(proposal.means, beta.guess)
-    lean.y <- lean.y - (beta.guess * unlist(fixed.data[,i+1]))
-    
-    #need to fix this problem right here!!!
-    
-    
-    proposals <- append(proposals, new.proposal(c(beta.guess, 100*beta.g.var))) #go for vague proposals
-  }
-  intercept.guess <- mean(lean.y)
-  variance.guess <-  var(lean.y)
-  df.guess <- 2*variance.guess/(variance.guess-1)
-  
-  intercept.proposal <- new.proposal(c(intercept.guess, 100*variance.guess))
-  proposals <- append(proposals, "alpha"=intercept.proposal)
-  
-  precision.proposal <- function(n) rgamma(n, 1/(5*y.var), 5)
-  proposals <- append(proposals, "tau"=precision.proposal)
-  
-  err.prior <- function(z, df) dt(z, df)
-  proposals <- append(proposals, "err.dist"=err.prior)
-  
-  priors
-}
-
-metromc <- function(data, mmc_spec, iter = 2000, burn = 500) {
-  # data is a table with dependent variable in first column
-  # mmc_spec is a list of two functions, priors and LH
-    # prior is a function for drawing potential values of the parameters
-    # LH is the likehood, a function that gives p density for a given error
-  # iter is number of MC steps to take
-  # burn is burn-in, number of initial steps to ignore
-   
-}
-
-post_approx <- function() {}
