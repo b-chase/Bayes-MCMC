@@ -25,45 +25,46 @@ metro_mc <- function(data, iter = 2000, burn = 500, starting=NULL, proposals="rw
   
   k <- ncol(data) #n-1 independent variables plus a constant
   
-  if (is.null(starting)) {starting <- c(rep(0,k), 0.1)}
-  names(starting) <- c(names(data[,2:k]), "tau")
-  
+  if (is.null(starting)) {starting <- c(rep(0,k-1), mean(unlist(data[,1])), 0.0001)}
+  names(starting) <- c(names(data[,2:k]), "intercept", "tau")
   if (proposals == "rwalk") {
     proposals <- sapply(seq(k), function(t) function(old) {old+rnorm(1)})
     proposals <- append(proposals, rexp(1,5)) # last one is for the precision, tau
   }
   names(proposals) <- names(starting)
-  
   if (priors == "vague") {priors <- sapply(seq(k+1), function(z) function(t) {1/(1+sqrt(abs(t)))})}
   names(priors) <- names(starting)
   
+  
   data <- mutate(data, const.=rep(1,nrow(data))) #necessary for next step
-  print(ncol(data))
-  likelihood <- function(inputs, params, prior.pdf) {
-    L <- 1 # 100% probability to start
+  
+  likelihood <- function(inputs, params) {
+    LLH <- 0 # 100% probability to start
     k <- length(params) - 1
     tau <- params[k+1]
-    print(tau)
-    for (j in seq(k)) {
-      L <- L * prior.pdf[[j]](params[j]) #multiple by prior
+    for (j in seq(nrow(inputs))) {
+      deviate <- as.numeric(inputs[j,1] - params[1:k] %*% as.numeric(inputs[j,2:(k+1)]))
+      LLH <- LLH + log(dnorm(deviate, 0, 1/sqrt(tau)))
     }
-    for (j in seq(10)) {
-      
-      deviate <- inputs[j,1] - params[1:k] %*% as.numeric(inputs[j,2:(k+1)])
-      print(rnorm(deviate, 0, 1/sqrt(tau)))
-    }
+    LLH
   }
+  
+  parameters <- as_tibble(starting)
   
   #let's chain
   for (i in seq(iter)) {
-    
+    # calculate prior densities
+    G.x <- 1
+    for (j in seq(k)) {
+      G.x <- G.x * priors[[j]](parameters[i,j]) #multiple by prior
+    }
   }
-  likelihood(data, starting, priors)
+  likelihood(data, starting)
   #priors
 }
 
 metro_mc(data)
-
+starting
 
 auto_metromc_spec <- function(data) {
   # data is a table with dependent variables in first column
