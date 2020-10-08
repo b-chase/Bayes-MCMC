@@ -30,11 +30,12 @@ metro_mc <- function(data, iter = 10000, burn = 500, starting=NULL, proposals="r
   names(starting) <- c(names(data[,2:k]), "intercept", "nv")
   if (proposals == "rwalk") {
     proposals <- sapply(seq(k), function(t) function(old) {old+rnorm(1,0,10)})
-    proposals <- append(proposals, function(t) rexp(1,0.05)) # last one is for the precision, tau
+    proposals <- append(proposals, function(old) {old*exp(rnorm(1,0,5))}) # last one is for the precision, tau
   }
   names(proposals) <- names(starting)
   if (priors == "vague") {
-    priors <- sapply(seq(k+1), function(z) function(b) 1)
+    priors <- sapply(seq(k), function(z) function(b) 1)
+    priors <- append(priors, function(b) {1/b})
   }
   names(priors) <- names(starting)
   
@@ -60,23 +61,32 @@ metro_mc <- function(data, iter = 10000, burn = 500, starting=NULL, proposals="r
   for (i in seq(iter)) {
     # calculate prior densities
     old.params <- param.list[i,]
-    proposed.params <- as.numeric(sapply(seq(k+1), function(x) {proposals[[x]](param.list[i,x])}))
-    prior.prob <- 1
+    #print(old.params)
+    proposed.params <- sapply(seq(k+1), function(x) {proposals[[x]](old.params[x])})
+    #print(proposed.params)
+    old.prior.prob <- 1
+    new.prior.prob <- 1
     for (j in seq(k)) {
-      prior.prob <- prior.prob * priors[[j]](param.list[i,j]) #prior prob of params
+      #old.prior.prob <- priors[[j]](old.params[j]) #prior prob of parameters, NOT USED
+      #new.prior.prob <- priors[[j]](proposed.params[j])
     }
     alpha.numer <- likelihood(data, proposed.params)
-    alpha.denom <- likelihood(data, param.list[i,])
+    alpha.denom <- likelihood(data, old.params) #can be optimized to use LLH from last iteration
     #print(alpha.numer)
     #print(alpha.denom)
     alpha <- alpha.numer - alpha.denom
     #print(alpha)
+    new.row <- c()
     if (log(runif(1)) < alpha) {
-      param.list <- rbind(param.list, proposed.params)
+      new.row <- as_tibble(proposed.params)
       accepts <- accepts + 1
     } else {
-      param.list <- rbind(param.list, param.list[i,])
+      new.row <- old.params
     }
+    #print(new.row)
+    param.list <- param.list %>% add_row(new.row)
+    #print("Full list:")
+    #print(param.list)
     if (i %% 20 == 0) {
       cat(paste0("\r", "Number of Accepts / Proposals: ", accepts, " / ", i))
     }
@@ -84,8 +94,17 @@ metro_mc <- function(data, iter = 10000, burn = 500, starting=NULL, proposals="r
   param.list[(burn+1):iter,]
 }
 
-test.chain <- metro_mc(data, iter=12000, burn=2000)
-par(mfcol=c(2,2))
-traceplot(mcmc(test.chain))
 
-
+auto_mc <- function(data) {
+  test.chain <- metro_mc(data, iter=2000, burn=500)
+  test.accepts <- nrow(unique(test.chain[,1]))
+  test.accepts
+  test.means <- apply(test.chain, 2, mean)
+  test.var <- sapply(test.means, function(t) max(t,1))
+  if (test.accepts >= 20) {
+    test.var <- apply(test.chain, 2, var)
+    # i know this is messy, but using ifelse wasn't working, will try fixing it later
+  }
+  
+  
+}
