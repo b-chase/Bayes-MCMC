@@ -1,6 +1,6 @@
 require(tidyverse)
 
-n <- 5000
+n <- 500
 x <- runif(n, -10, 30)
 z <- runif(n, -30, -12)
 b1 <- 27
@@ -28,7 +28,7 @@ metro_mc <- function(data, iter = 2000, burn = 500, starting=NULL, proposals="rw
   if (is.null(starting)) {starting <- c(rep(0,k-1), mean(unlist(data[,1])), 0.0001)}
   names(starting) <- c(names(data[,2:k]), "intercept", "tau")
   if (proposals == "rwalk") {
-    proposals <- sapply(seq(k), function(t) function(old) {old+rnorm(1)})
+    proposals <- sapply(seq(k), function(t) function(old) {old+rnorm(1,0,10)})
     proposals <- append(proposals, function(t) rexp(1,5)) # last one is for the precision, tau
   }
   names(proposals) <- names(starting)
@@ -39,33 +39,50 @@ metro_mc <- function(data, iter = 2000, burn = 500, starting=NULL, proposals="rw
   
   likelihood <- function(inputs, params) {
     k <- length(params) - 1
-    tau <- params[k+1]
-    
-    deviates <- apply(inputs, 1, function(pnt) 
-      {pnt[1] - params[1:k] %*% as.numeric(pnt[2:(k+1)])})
-    
-    LLH <- sum(log(dnorm(deviates, 0, 1/sqrt(tau))))
+    tau <- as.numeric(params[k+1])
+    nv <- (2/tau) / (1/tau - 1) #if we want to use student-t instead
+    deviates <- as.numeric(apply(inputs, 1, function(pnt) 
+      {pnt[1] - as.numeric(params[1:k]) %*% as.numeric(pnt[2:(k+1)])}))
+    #print(summary(deviates))
+    #print(tau)
+    LLH <- sum(log(dt(deviates, nv)))
     LLH
   }
   
   #list of all parameters that show up in chain
   param.list <- as_tibble(rbind(starting)) 
   #let's chain
+  accepts <- 0
+  
   for (i in seq(iter)) {
     # calculate prior densities
-    proposed.params <- sapply(seq(k+1), function(x) {proposals[x](param.list[i,x])})
+    old.params <- param.list[i,]
+    proposed.params <- as.numeric(sapply(seq(k+1), function(x) {proposals[[x]](param.list[i,x])}))
     prior.prob <- 1
     for (j in seq(k)) {
-      prior.prob <- prior.prob * priors[[j]](param.list[i,j]) #multiple by prior
+      prior.prob <- prior.prob * priors[[j]](param.list[i,j]) #prior prob of params
     }
-    
+    alpha.numer <- likelihood(data, proposed.params)
+    alpha.denom <- likelihood(data, param.list[i,])
+    #print(alpha.numer)
+    #print(alpha.denom)
+    alpha <- alpha.numer - alpha.denom
+    #print(alpha)
+    if (log(runif(1)) < alpha) {
+      param.list <- rbind(param.list, proposed.params)
+      accepts <- accepts + 1
+    } else {
+      param.list <- rbind(param.list, param.list[i,])
+    }
+    if (i %% 5 == 0) {
+      cat(paste0("\r", i))
+    }
   }
-  likelihood(data, starting)
-  #priors
+  print(paste0("Number of Accepts/Rejects: ", accepts, " / ", iter))
   param.list
 }
 
-metro_mc(data)
+metro_mc(data, iter=50)
 
 
 auto_metromc_spec <- function(data) {
