@@ -25,19 +25,20 @@ metro_mc <- function(data, iter = 10000, burn = 500, starting=NULL, proposals="r
   # burn is burn-in, number of initial steps to ignore
   
   k <- ncol(data) #n-1 independent variables plus a constant
+  var.names <- c(names(data[,2:k]), "intercept", "nv")
   
-  if (is.null(starting)) {starting <- c(rep(0,k-1), mean(unlist(data[,1])), 1)}
-  names(starting) <- c(names(data[,2:k]), "intercept", "nv")
-  if (proposals == "rwalk") {
+  if (is.null(starting)) {starting <- c(rep(0,k), 5)}
+  names(starting) <- var.names
+  if (proposals[1] == "rwalk") {
     proposals <- sapply(seq(k), function(t) function(old) {old+rnorm(1,0,10)})
-    proposals <- append(proposals, function(old) {old*exp(rnorm(1,0,5))}) # last one is for the precision, tau
+    proposals <- append(proposals, function(old) {runif(1,1,150)}) # last one is for the precision, tau
   }
-  names(proposals) <- names(starting)
-  if (priors == "vague") {
+  names(proposals) <- var.names
+  if (priors[1] == "vague") {
     priors <- sapply(seq(k), function(z) function(b) 1)
     priors <- append(priors, function(b) {1/b})
   }
-  names(priors) <- names(starting)
+  names(priors) <- var.names
   
   data <- mutate(data, const.=rep(1,nrow(data))) #necessary for next step
   
@@ -63,6 +64,7 @@ metro_mc <- function(data, iter = 10000, burn = 500, starting=NULL, proposals="r
     old.params <- param.list[i,]
     #print(old.params)
     proposed.params <- sapply(seq(k+1), function(x) {proposals[[x]](old.params[x])})
+    names(proposed.params) <- var.names
     #print(proposed.params)
     old.prior.prob <- 1
     new.prior.prob <- 1
@@ -75,6 +77,13 @@ metro_mc <- function(data, iter = 10000, burn = 500, starting=NULL, proposals="r
     #print(alpha.numer)
     #print(alpha.denom)
     alpha <- alpha.numer - alpha.denom
+    if (is.na(alpha)) {
+      # output error information
+      print(proposed.params)
+      print(alpha.numer)
+      print(old.params)
+      print(alpha.denom)
+    }
     #print(alpha)
     new.row <- c()
     if (log(runif(1)) < alpha) {
@@ -87,24 +96,75 @@ metro_mc <- function(data, iter = 10000, burn = 500, starting=NULL, proposals="r
     param.list <- param.list %>% add_row(new.row)
     #print("Full list:")
     #print(param.list)
-    if (i %% 20 == 0) {
+    if (i %% 50 == 0) {
       cat(paste0("\r", "Number of Accepts / Proposals: ", accepts, " / ", i))
     }
   }
-  param.list[(burn+1):iter,]
+  cat("\nFinished")
+  param.list[(burn+1):(iter+1),]
 }
 
 
 auto_mc <- function(data) {
-  test.chain <- metro_mc(data, iter=2000, burn=500)
+  k <- ncol(data) #number of variables, not including intercept
+  print("First running a test chain of 2000 samples (burning first 500):")
+  test.chain <- metro_mc(data, iter=2000, burn=50)
+  summary(test.chain)
   test.accepts <- nrow(unique(test.chain[,1]))
   test.accepts
   test.means <- apply(test.chain, 2, mean)
-  test.var <- sapply(test.means, function(t) max(t,1))
-  if (test.accepts >= 20) {
-    test.var <- apply(test.chain, 2, var)
+  test.var <- sapply(test.means, function(t) max(abs(t)/1.6, 1))
+  if (test.accepts >= 3) {
+    test.var <- apply(test.chain, 2, function(m) {(max(m)-min(m))/sqrt(3)})
     # i know this is messy, but using ifelse wasn't working, will try fixing it later
   }
+  print(test.means)
+  print(test.var)
   
+  zone_in <- function(data.tib, last.chain, means, varis, batches=5, batch.size=1000, batch.burn=50) {
+    if (batches == 0) {
+      return(last.chain)
+    } else {
+      chain.proposals <- lapply(seq(k), function(z) function(old) old + rnorm(1, 0, varis[z]))
+      chain.proposals <- append(chain.proposals, function(old) {1+(old-1)*exp(rcauchy(1, 0, varis[k+1]/5))})
+      
+      new.chain <- metro_mc(data, iter=batch.size, burn=batch.burn, proposals=chain.proposals, starting=means)
+      
+      chain.accepts <- nrow(unique(new.chain[,1]))
+      chain.means <- apply(new.chain, 2, mean)
+      chain.varis <- sapply(chain.means, function(t) max(abs(t), 1))
+      if (chain.accepts >= 3) {
+        chain.var <- apply(new.chain, 2, function(m) {(max(m)-min(m))/sqrt(3)})
+        # i know this is messy, but using ifelse() wasn't working, will try fixing it later
+      }
+      print(rbind(chain.means, chain.varis))
+      return(zone_in(data.tib, new.chain, chain.means, chain.varis, batches-1, batch.size, batch.burn))
+    }
+  }
   
+  batching.test <- zone_in(data, test.chain, test.means, test.var, batch.size = 2000)
+  
+  chain1.proposals <- lapply(seq(k), function(z) function(old) old + rnorm(1, 0, test.var[z]))
+  chain1.proposals <- append(chain1.proposals, function(old) {1+(old-1)*exp(rcauchy(1, 0, test.var[k+1]/5))})
+  print("Running first chain with updated proposal distributions")
+  chain1 <- metro_mc(data, iter=1000, burn=50, proposals=chain1.proposals, starting=test.means)
+  summary(chain1)
+  
+  chain1.accepts <- nrow(unique(chain1[,1]))
+  chain1.means <- apply(chain1, 2, mean)
+  chain1.var <- sapply(chain1.means, function(t) max(abs(t), 1))
+  if (test.accepts >= 3) {
+    chain1.var <- apply(chain1, 2, function(m) {(max(m)-min(m))/sqrt(3)})
+    # i know this is messy, but using ifelse wasn't working, will try fixing it later
+  }
+  chain1.means
+  chain1.var
+  
+  chain2.proposals <- lapply(seq(k), function(z) function(old) old + rnorm(1, 0, chain1.var[z]/2))
+  chain2.proposals <- append(chain2.proposals, function(old) {1 + (old-1)*exp(rcauchy(1, 0, chain1.var[k+1]))})
+  print("Running first chain with updated proposal distributions")
+  chain2 <- metro_mc(data, iter=1000, burn=50, proposals=chain2.proposals, starting=chain1.means)
+  summary(chain2)
 }
+
+auto_mc(data)
