@@ -1,4 +1,5 @@
 require(tidyverse)
+library(coda)
 
 n <- 500
 x <- runif(n, -10, 30)
@@ -15,7 +16,7 @@ data <- tibble(y,x,z)
 
 lm(y~x+z, data)
 
-metro_mc <- function(data, iter = 2000, burn = 500, starting=NULL, proposals="rwalk", priors="vague") {
+metro_mc <- function(data, iter = 10000, burn = 500, starting=NULL, proposals="rwalk", priors="vague") {
   # data is a table with dependent variable in first column
   # mmc_spec is a list of two functions, priors and LH
   # prior is a function for drawing potential values of the parameters
@@ -25,26 +26,28 @@ metro_mc <- function(data, iter = 2000, burn = 500, starting=NULL, proposals="rw
   
   k <- ncol(data) #n-1 independent variables plus a constant
   
-  if (is.null(starting)) {starting <- c(rep(0,k-1), mean(unlist(data[,1])), 0.0001)}
-  names(starting) <- c(names(data[,2:k]), "intercept", "tau")
+  if (is.null(starting)) {starting <- c(rep(0,k-1), mean(unlist(data[,1])), 1)}
+  names(starting) <- c(names(data[,2:k]), "intercept", "nv")
   if (proposals == "rwalk") {
     proposals <- sapply(seq(k), function(t) function(old) {old+rnorm(1,0,10)})
-    proposals <- append(proposals, function(t) rexp(1,5)) # last one is for the precision, tau
+    proposals <- append(proposals, function(t) rexp(1,0.05)) # last one is for the precision, tau
   }
   names(proposals) <- names(starting)
-  if (priors == "vague") {priors <- sapply(seq(k+1), function(z) function(t) {1/(1+sqrt(abs(t)))})}
+  if (priors == "vague") {
+    priors <- sapply(seq(k+1), function(z) function(b) 1)
+  }
   names(priors) <- names(starting)
   
   data <- mutate(data, const.=rep(1,nrow(data))) #necessary for next step
   
   likelihood <- function(inputs, params) {
     k <- length(params) - 1
-    tau <- as.numeric(params[k+1])
-    nv <- (2/tau) / (1/tau - 1) #if we want to use student-t instead
-    deviates <- as.numeric(apply(inputs, 1, function(pnt) 
-      {pnt[1] - as.numeric(params[1:k]) %*% as.numeric(pnt[2:(k+1)])}))
+    params <- as.numeric(params)
+    nv <- params[k+1]
+    deviates <- apply(inputs, 1, function(pnt) 
+      {pnt[1] - params[1:k] %*% pnt[2:(k+1)]})
     #print(summary(deviates))
-    #print(tau)
+    #print(nv)
     LLH <- sum(log(dt(deviates, nv)))
     LLH
   }
@@ -74,16 +77,16 @@ metro_mc <- function(data, iter = 2000, burn = 500, starting=NULL, proposals="rw
     } else {
       param.list <- rbind(param.list, param.list[i,])
     }
-    if (i %% 5 == 0) {
-      cat(paste0("\r", i))
+    if (i %% 20 == 0) {
+      cat(paste0("\r", "Number of Accepts / Proposals: ", accepts, " / ", i))
     }
   }
-  print(paste0("Number of Accepts/Rejects: ", accepts, " / ", iter))
-  param.list
+  param.list[(burn+1):iter,]
 }
 
-metro_mc(data, iter=50)
-
+test.chain <- metro_mc(data, iter=12000, burn=2000)
+par(mfcol=c(2,2))
+traceplot(mcmc(test.chain))
 
 auto_metromc_spec <- function(data) {
   # data is a table with dependent variables in first column
@@ -131,7 +134,7 @@ auto_metromc_spec <- function(data) {
   proposals <- append(proposals, "alpha"=intercept.proposal)
   
   precision.proposal <- function(n) rgamma(n, 1/(5*y.var), 5)
-  proposals <- append(proposals, "tau"=precision.proposal)
+  proposals <- append(proposals, "nv"=precision.proposal)
   
   err.prior <- function(z, df) dt(z, df)
   proposals <- append(proposals, "err.dist"=err.prior)
