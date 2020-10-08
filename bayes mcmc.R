@@ -55,7 +55,7 @@ metro_mc <- function(data, iter = 10000, burn = 500, starting=NULL, proposals="r
   }
   
   #list of all parameters that show up in chain
-  param.list <- as_tibble(rbind(starting)) 
+  param.list <- as.matrix(rbind(starting)) 
   old.LLH <- likelihood(data, starting)
   #let's chain
   accepts <- 0
@@ -65,7 +65,7 @@ metro_mc <- function(data, iter = 10000, burn = 500, starting=NULL, proposals="r
     old.params <- param.list[i,]
     #print(old.params)
     proposed.params <- sapply(seq(k+1), function(x) {proposals[[x]](old.params[x])})
-    names(proposed.params) <- var.names
+    #names(proposed.params) <- var.names
     #print(proposed.params)
     old.prior.prob <- 1
     new.prior.prob <- 1
@@ -89,14 +89,14 @@ metro_mc <- function(data, iter = 10000, burn = 500, starting=NULL, proposals="r
     #print(alpha)
     new.row <- c()
     if (log(runif(1)) < alpha) {
-      new.row <- as_tibble(proposed.params)
+      new.row <- proposed.params
       accepts <- accepts + 1
       old.LLH <- new.LLH
     } else {
       new.row <- old.params
     }
     #print(new.row)
-    param.list <- param.list %>% add_row(new.row)
+    param.list <- rbind(param.list, new.row)
     #print("Full list:")
     #print(param.list)
     if (i %% 50 == 0) {
@@ -104,7 +104,7 @@ metro_mc <- function(data, iter = 10000, burn = 500, starting=NULL, proposals="r
     }
   }
   cat("\nFinished")
-  param.list[(burn+1):(iter+1),]
+  as_tibble(param.list[(burn+1):(iter+1),])
 }
 
 
@@ -118,7 +118,7 @@ auto_mc <- function(data, batch.sizes=5000) {
   test.means <- apply(test.chain, 2, mean)
   test.var <- sapply(test.means, function(t) max(abs(t)/1.6, 1))
   if (test.accepts >= 3) {
-    test.var <- apply(test.chain, 2, function(m) {(max(m)-min(m))/sqrt(3)})
+    test.var <- apply(test.chain, 2, function(m) {10*(max(m)-min(m))/sqrt(3)})
     # i know this is messy, but using ifelse wasn't working, will try fixing it later
   }
   print(test.means)
@@ -138,7 +138,7 @@ auto_mc <- function(data, batch.sizes=5000) {
       chain.means <- apply(new.chain, 2, mean)
       chain.varis <- sapply(chain.means, function(t) max(abs(t)/2, 1))
       if (chain.accepts >= 3) {
-        chain.varis <- apply(new.chain, 2, function(m) {(max(m)-min(m))/sqrt(3)})
+        chain.varis <- apply(new.chain, 2, function(m) {5*(max(m)-min(m))/sqrt(3)})
         # i know this is messy, but using ifelse() wasn't working, will try fixing it later
       }
       print(rbind(chain.means, chain.varis))
@@ -154,3 +154,4 @@ auto_mc <- function(data, batch.sizes=5000) {
 }
 
 my.chain <- auto_mc(data)
+summary(my.chain)
