@@ -29,42 +29,44 @@ metro_mc <- function(data, iter = 2000, burn = 500, starting=NULL, proposals="rw
   names(starting) <- c(names(data[,2:k]), "intercept", "tau")
   if (proposals == "rwalk") {
     proposals <- sapply(seq(k), function(t) function(old) {old+rnorm(1)})
-    proposals <- append(proposals, rexp(1,5)) # last one is for the precision, tau
+    proposals <- append(proposals, function(t) rexp(1,5)) # last one is for the precision, tau
   }
   names(proposals) <- names(starting)
   if (priors == "vague") {priors <- sapply(seq(k+1), function(z) function(t) {1/(1+sqrt(abs(t)))})}
   names(priors) <- names(starting)
   
-  
   data <- mutate(data, const.=rep(1,nrow(data))) #necessary for next step
   
   likelihood <- function(inputs, params) {
-    LLH <- 0 # 100% probability to start
     k <- length(params) - 1
     tau <- params[k+1]
-    for (j in seq(nrow(inputs))) {
-      deviate <- as.numeric(inputs[j,1] - params[1:k] %*% as.numeric(inputs[j,2:(k+1)]))
-      LLH <- LLH + log(dnorm(deviate, 0, 1/sqrt(tau)))
-    }
+    
+    deviates <- apply(inputs, 1, function(pnt) 
+      {pnt[1] - params[1:k] %*% as.numeric(pnt[2:(k+1)])})
+    
+    LLH <- sum(log(dnorm(deviates, 0, 1/sqrt(tau))))
     LLH
   }
   
-  parameters <- as_tibble(starting)
-  
+  #list of all parameters that show up in chain
+  param.list <- as_tibble(rbind(starting)) 
   #let's chain
   for (i in seq(iter)) {
     # calculate prior densities
-    G.x <- 1
+    proposed.params <- sapply(seq(k+1), function(x) {proposals[x](param.list[i,x])})
+    prior.prob <- 1
     for (j in seq(k)) {
-      G.x <- G.x * priors[[j]](parameters[i,j]) #multiple by prior
+      prior.prob <- prior.prob * priors[[j]](param.list[i,j]) #multiple by prior
     }
+    
   }
   likelihood(data, starting)
   #priors
+  param.list
 }
 
 metro_mc(data)
-starting
+
 
 auto_metromc_spec <- function(data) {
   # data is a table with dependent variables in first column
