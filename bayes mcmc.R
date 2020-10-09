@@ -26,25 +26,21 @@ metro_mc <- function(data, iter = 10000, burn = 500, starting=NULL, proposals="r
   
   k <- ncol(data) #n-1 independent variables plus a constant
   var.names <- c(names(data[,2:k]), "intercept", "nv")
+  # k+1 terms if we count nv from t-distributed error (can also use precision or somethign else)
   
   if (is.null(starting)) {starting <- c(rep(0,k), 5)}
   names(starting) <- var.names
-  if (proposals[1] == "rwalk") {
-    proposals <- sapply(seq(k), function(t) function(old) {old+rnorm(1,0,10)})
-    proposals <- append(proposals, function(old) {runif(1,1,150)}) # last one is for the precision, tau
+  if (is.character(proposals)) {
+    proposals <- function(old.props) {new <- c(old.props[1:k] + rnorm(k,-10,10), rgamma(1, 1, 10))}
   }
-  names(proposals) <- var.names
-  if (priors[1] == "vague") {
-    priors <- sapply(seq(k), function(z) function(b) 1)
-    priors <- append(priors, function(b) {1/b})
+  if (is.character(priors)) {
+    priors <- function(params) {c(rep(1,k), 1/params[k+1])}
   }
-  names(priors) <- var.names
   
   data <- mutate(data, const.=rep(1,nrow(data))) #necessary for next step
   
   likelihood <- function(inputs, params) {
     k <- length(params) - 1
-    params <- as.numeric(params)
     nv <- params[k+1]
     deviates <- apply(inputs, 1, function(pnt) 
       {pnt[1] - params[1:k] %*% pnt[2:(k+1)]})
@@ -64,18 +60,14 @@ metro_mc <- function(data, iter = 10000, burn = 500, starting=NULL, proposals="r
     # calculate prior densities
     old.params <- param.list[i,]
     #print(old.params)
-    proposed.params <- sapply(seq(k+1), function(x) {proposals[[x]](old.params[x])})
+    proposed.params <- proposals(old.params)
     #names(proposed.params) <- var.names
     #print(proposed.params)
-    old.prior.prob <- 1
-    new.prior.prob <- 1
-    for (j in seq(k)) {
-      #old.prior.prob <- priors[[j]](old.params[j]) #prior prob of parameters, NOT USED
-      #new.prior.prob <- priors[[j]](proposed.params[j])
-    }
+    old.prior.prob <- prod(priors(old.params))
+    new.prior.prob <- prod(priors(proposed.params))
     new.LLH <- likelihood(data, proposed.params)
-    alpha.numer <- new.LLH
-    alpha.denom <- old.LLH #can be optimized to use LLH from last iteration
+    alpha.numer <- new.LLH + log(new.prior.prob)
+    alpha.denom <- old.LLH + log(old.prior.prob)
     #print(alpha.numer)
     #print(alpha.denom)
     alpha <- alpha.numer - alpha.denom
@@ -103,7 +95,7 @@ metro_mc <- function(data, iter = 10000, burn = 500, starting=NULL, proposals="r
       cat(paste0("\r", "Number of Accepts / Proposals: ", accepts, " / ", i))
     }
   }
-  cat("\nFinished")
+  cat("\nFinished\n")
   as_tibble(param.list[(burn+1):(iter+1),])
 }
 
@@ -125,12 +117,13 @@ auto_mc <- function(data, batch.sizes=5000) {
   print(test.var)
   
   zone_in <- function(data.tib, last.chain, means, varis, batches=5, batch.size=5000, batch.burn=500) {
+    k <- ncol(data.tib)
     if (batches == 0) {
       return(last.chain)
     } else {
       cat(paste0("\nBatches remaining: ", batches, "\n"))
-      chain.proposals <- lapply(seq(k), function(z) function(old) old + rnorm(1, 0, varis[z]))
-      chain.proposals <- append(chain.proposals, function(old) {1+(old-1)*exp(rcauchy(1, 0, varis[k+1]/5))})
+      chain.proposals <- function(old.params) {c(rnorm(k,means[1:k],2*varis[1:k]), 
+                                                 rgamma(1,means[k+1]^2/varis[k+1],varis[k+1]/means[k+1]))}
       
       new.chain <- metro_mc(data, iter=batch.size, burn=batch.burn, proposals=chain.proposals, starting=means)
       
@@ -148,7 +141,7 @@ auto_mc <- function(data, batch.sizes=5000) {
   
   last.chain <- zone_in(data, test.chain, test.means, test.var, batch.size = batch.sizes, batch.burn = 0)
   par(mfcol=c(2,ceiling(k/2)+1))
-  traceplot(mcmc(last.chain))
+  traceplot(mcmc(last.chain))  
   
   last.chain
 }
