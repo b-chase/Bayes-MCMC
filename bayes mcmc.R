@@ -178,7 +178,7 @@ auto_mc <- function(data, batch.sizes=5000, total.batches=5) {
 
 my.chain <- auto_mc(data, batch.sizes = 20000, total.batches = 4)
 densplot(mcmc(my.chain))
-densplot
+
 par(mfcol=c(2,2))
 apply(my.chain, 2, hist)
 
