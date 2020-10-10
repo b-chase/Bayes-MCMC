@@ -1,16 +1,16 @@
 require(tidyverse)
 library(coda)
 
-n <- 200
+n <- 500
 x <- runif(n, -10, 30)
 z <- runif(n, -30, -12)
-b1 <- 27
+b1 <- 42
 b1.alt <- -24
-b2 <- -0.04
-a <- -2
+b2 <- -0.02
+a <- -13
 
 prob.fail <- 0
-y <- ifelse(runif(n)>prob.fail,b1*x,b1.alt*x) + b2*z + a + rnorm(n, 0, 10)
+y <- ifelse(runif(n)>prob.fail,b1*x,b1.alt*x) + b2*z + a + rnorm(n, 0, 25)
 
 data <- tibble(y,x,z)
 
@@ -100,7 +100,7 @@ metro_mc <- function(data, iter = 10000, burn = 500, starting=NULL, proposals="r
     param.list <- rbind(param.list, new.row)
     #print("Full list:")
     #print(param.list)
-    if (i %% 100 == 0) {
+    if (i %% 500 == 0) {
       cat(paste0("\rNumber of Accepts / Proposals: ", accepts, " / ", i))
       #print("Last Accepted:")
       #print(new.row)
@@ -123,11 +123,13 @@ auto_mc <- function(data, batch.sizes=5000, total.batches=5) {
   
   var.names <- names(data)
   lin.model <- lm(eval(paste0(var.names[1],"~", paste0(var.names[2:k],collapse="+"))), data[1:20,])
+  print("Linear model of first 20 terms:")
+  print(summary(lin.model))
   lm.guesses <- c(lin.model$coefficients[c(2:k,1)], 1/var(lin.model$residuals))
   names(lm.guesses) = c(names(data[2:k]), "intercept", "tau")
   test.data <- data[21:nrow(data),]
   test.proposals <- function(old.params) {c(rnorm(k, lm.guesses[1:k]), 
-                                            exp(rnorm(1,log(old.params),1)))}
+                                            rgamma(1, 0.05, 0.02))}
   
   print("First running a test chain of 2000 samples (burning first 500):")
   test.chain <- metro_mc(test.data, iter=2000, burn=500, starting=lm.guesses)
@@ -143,7 +145,6 @@ auto_mc <- function(data, batch.sizes=5000, total.batches=5) {
   print(as_tibble(signif(rbind(test.means, test.var)),5))
   Sys.sleep(5)
   
-  
   zone_in <- function(data.tib, last.chain, means, varis, batches=5, batch.size=5000, batch.burn=500) {
     k <- ncol(data.tib)
     if (batches == 0) {
@@ -151,7 +152,7 @@ auto_mc <- function(data, batch.sizes=5000, total.batches=5) {
     } else {
       cat(paste0("\nBatches remaining: ", batches, "\n"))
       chain.proposals <- function(old.params) {c(old.params[1:k] + rnorm(k,0,sqrt(varis[1:k])), 
-                                                 exp(rnorm(1,log(old.params), varis[k+1])))}
+                                                 old.params[k+1]*exp(rnorm(1,0,sqrt(varis[k+1]))))}
       
       new.chain <- metro_mc(data, iter=batch.size, burn=batch.burn, proposals=chain.proposals, starting=means)
       
@@ -160,10 +161,10 @@ auto_mc <- function(data, batch.sizes=5000, total.batches=5) {
       chain.varis <- varis/1.6
       if (chain.accepts >= 5) {
         chain.varis <- apply(new.chain, 2, function(m) {(max(m)-min(m))/sqrt(3)})
-        # i know this is messy, but using ifelse() wasn't working, will try fixing it later
       }
       print(as_tibble(signif(rbind(chain.means, chain.varis)),5))
       Sys.sleep(5)
+      
       return(do.call(zone_in, args=list(data.tib, new.chain, chain.means, chain.varis, batches-1, batch.size, batch.burn)))
     }
   }
@@ -175,11 +176,16 @@ auto_mc <- function(data, batch.sizes=5000, total.batches=5) {
   last.chain
 }
 
-#my.chain <- auto_mc(data, batch.sizes = 10000, total.batches = 8)
-#summary(my.chain)
+my.chain <- auto_mc(data, batch.sizes = 20000, total.batches = 4)
+densplot(mcmc(my.chain))
+densplot
+par(mfcol=c(2,2))
+apply(my.chain, 2, hist)
 
 first <- as.matrix(rbind(c(0.0001,1,0)))
 tests <- first
+
+'
 for (i in seq(5000)) {
   h1 <- tests[i,1]
   h2 <- tests[i,2]
@@ -187,15 +193,17 @@ for (i in seq(5000)) {
                                        rgamma(1,h1, h2)+10^-100)}
   chain.i <- metro_mc(data, iter=2000, burn=100, starting = c(30, -0.1, 0, 0.01), proposals = test.prop)
   tests[i,3] <- nrow(unique(chain.i[,1]))
-  tests <- rbind(tests, c(10^runif(1,-2,2), 10^runif(1,-4,4), 0))
+  tests <- rbind(tests, c(10^runif(1,-2,0.5), 10^runif(1,-5,3), 0))
   print(paste0("Latest test result! (", i, ")"))
   print(apply(chain.i,2,mean))
   print(signif(tests[i,]),4)
 }
 tib.tests <- as_tibble(tests)
-names(tib.tests) <- c('h1', 'h2', 'accepts')
-tib.tests %>% arrange(desc(accepts)) %>% mutate('e(x)'=h1*h2, 'v(x)'=h1*h2^2)
-summary(tib.tests)
-ggplot(tib.tests) +
+names(tib.tests) <- c("h1", "h2", "accepts")
+
+tib.tests %>% arrange(desc(accepts)) %>% mutate("e(x)"=h1*h2, "v(x)"=h1*h2^2)
+ggplot(filter(tib.tests, accepts>10)) +
   geom_point(mapping=aes(h1, h2, size=accepts), position = "jitter")
 
+filter(tib.tests, accepts>18) %>% arrange(desc(accepts))
+'
