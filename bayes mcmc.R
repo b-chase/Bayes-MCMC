@@ -1,76 +1,76 @@
 require(tidyverse)
 library(coda)
 
-n <- 500
-x <- runif(n, -10, 30)
-z <- runif(n, -30, -12)
-b1 <- 42
-b1.alt <- -24
-b2 <- -0.02
-a <- -13
+lin_LLH <- function(inputs, params, k) {
+  tau <- 1/sqrt(params[k+1])
+  deviates <- apply(inputs, 1, function(pnt) 
+  {pnt[1] - params[1:k] %*% pnt[2:(k+1)]})
+  #print(summary(deviates))
+  #print(tau)
+  LLH <- sum(log(dnorm(deviates, 0, tau)))
+  LLH
+}
 
-prob.fail <- 0
-y <- ifelse(runif(n)>prob.fail,b1*x,b1.alt*x) + b2*z + a + rnorm(n, 0, 25)
-
-data <- tibble(y,x,z)
-
-lm(y~x+z, data)
-
-metro_mc <- function(data, iter = 10000, burn = 500, starting=NULL, proposals="rwalk", priors="vague") {
+metro_mc <- function(data, iter = 10000, burn = 500, starting=NULL, 
+                     proposals="rwalk", priors="vague", 
+                     add.ones=TRUE, likelihood=lin.LLH) {
   # data is a table with dependent variable in first column
   # mmc_spec is a list of two functions, priors and LH
   # prior is a function for drawing potential values of the parameters
   # LH is the likehood, a function that gives p density for a given error
   # iter is number of MC steps to take
   # burn is burn-in, number of initial steps to ignore
+  
+  # next step - make sure priors and proposals return correct size vectors, or else return error
+  # also make sure likelihood is a log likelihood, and returns correctly
+  # also make sure starting params are workable and right size
+  
   k <- ncol(data) #n-1 independent variables plus a constant
   
-  var.names <- c(names(data[,2:k]), "intercept", "tau")
+  var.names <- c(names(data[,2:k]), "exp", "intercept", "tau")
   # k+1 terms if we count tau (precision)
   
-  if (is.null(starting)) {starting <- c(rep(0,k), 0.000001)}
-  names(starting) <- var.names
+  if (is.null(starting)) {
+    starting <- c(rep(0,k), 0.000001)
+    var.names <- c(names(data[,2:k]), "intercept", "tau")
+    names(starting) <- var.names
+  } else {
+    var.names <- names(starting)
+    k <- length(starting)-1 # sometimes we won't have a normal linear model
+  }
   if (is.character(proposals)) {
     proposals <- function(old.props) {c(old.props[1:k] + runif(k,-10,10), rgamma(1, 1, 20)+10^-100)}
   }
   if (is.character(priors)) {
     priors <- function(params) {c(rep(1,k), 1/params[k+1])}
   }
+  if (add.ones) {data <- mutate(data, const.=rep(1,nrow(data)))}
   
-  data <- mutate(data, const.=rep(1,nrow(data))) #necessary for next step
   
-  likelihood <- function(inputs, params, k) {
-    tau <- 1/sqrt(params[k+1])
-    deviates <- apply(inputs, 1, function(pnt) 
-      {pnt[1] - params[1:k] %*% pnt[2:(k+1)]})
-    #print(summary(deviates))
-    #print(tau)
-    LLH <- sum(log(dnorm(deviates, 0, tau)))
-    LLH
-  }
-  
-  test <- c(1.7, -0.6815, -69.74, 0.001)
-  an <- likelihood(data, test, k)
-  an
-  started <- c(13.453, -10.0885, -379.4, 2.267*10^-5)
-  ad <- likelihood(data, started, k)
-  ad
-  proposals(test)
-  priors(test)
-  exp(an-ad)
+  # debug
+  #test <- c(1.7, -0.6815, -69.74, 0.001)
+  #an <- likelihood(data, test, k)
+  #an
+  #started <- c(13.453, -10.0885, -379.4, 2.267*10^-5)
+  #ad <- likelihood(data, started, k)
+  #ad
+  #proposals(test)
+  #priors(test)
+  #exp(an-ad)
   
   #list of all parameters that show up in chain
   param.list <- as.matrix(rbind(starting)) 
   old.LLH <- likelihood(data, starting, k)
   #let's chain
   accepts <- 0
-  
+  last.accepts <- 0
+  likelihoods <- c(old.LLH)
+  old.params <- starting
+
   for (i in seq(iter)) {
     # calculate prior densities
-    old.params <- param.list[i,]
     #print(old.params)
     proposed.params <- proposals(old.params)
-    #names(proposed.params) <- var.names
     #print(proposed.params)
     old.prior.prob <- prod(priors(old.params))
     new.prior.prob <- prod(priors(proposed.params))
@@ -83,9 +83,9 @@ metro_mc <- function(data, iter = 10000, burn = 500, starting=NULL, proposals="r
     if (is.na(alpha)) {
       # output error information
       print(proposed.params)
-      print(alpha.numer)
+      print(c("Prior, LLH, Numer", new.prior.prob, new.LLH, alpha.numer))
       print(old.params)
-      print(alpha.denom)
+      print(c("Prior, LLH, Denom", old.prior.prob, old.LLH, alpha.denom))
     }
     #print(alpha)
     new.row <- c()
@@ -93,15 +93,22 @@ metro_mc <- function(data, iter = 10000, burn = 500, starting=NULL, proposals="r
       new.row <- proposed.params
       accepts <- accepts + 1
       old.LLH <- new.LLH
+      old.params <- proposed.params
     } else {
       new.row <- old.params
     }
     #print(new.row)
     param.list <- rbind(param.list, new.row)
+    likelihoods <- c(likelihoods, old.LLH)
     #print("Full list:")
     #print(param.list)
-    if (i %% 500 == 0) {
-      cat(paste0("\rNumber of Accepts / Proposals: ", accepts, " / ", i))
+    check.div <- 100
+    if (i %% check.div == 0) {
+      new.accepts <- accepts-last.accepts
+      last.accepts <- accepts
+      cat(paste0("\rNumber of Accepts / Proposals: ", accepts, " / ", i, 
+                 "    -    Current Rate of Accepts: ", round(100*new.accepts/check.div, 1), "%"))
+      
       #print("Last Accepted:")
       #print(new.row)
       #print(alpha.denom)
@@ -114,7 +121,10 @@ metro_mc <- function(data, iter = 10000, burn = 500, starting=NULL, proposals="r
   }
   cat("\nFinished\n")
   cat(paste0("There were ",accepts, " accepted proposals.\n"))
-  as_tibble(param.list[(burn+2):(iter+1),])
+  names(param.list) <- var.names
+  chain.out <- as_tibble(param.list[(burn+2):(iter+1),])
+  names(chain.out) <- var.names
+  list(chain=chain.out, llh.list=likelihoods[(burn+2):(iter+1)])
 }
 
 
@@ -132,7 +142,7 @@ auto_mc <- function(data, batch.sizes=5000, total.batches=5) {
                                             rgamma(1, 0.05, 0.02))}
   
   print("First running a test chain of 2000 samples (burning first 500):")
-  test.chain <- metro_mc(test.data, iter=2000, burn=500, starting=lm.guesses)
+  test.chain <- metro_mc(test.data, iter=2000, burn=500, starting=lm.guesses)$chain
   summary(test.chain)
   test.accepts <- nrow(unique(test.chain[,1]))
   test.accepts
@@ -154,7 +164,7 @@ auto_mc <- function(data, batch.sizes=5000, total.batches=5) {
       chain.proposals <- function(old.params) {c(old.params[1:k] + rnorm(k,0,sqrt(varis[1:k])), 
                                                  old.params[k+1]*exp(rnorm(1,0,sqrt(varis[k+1]))))}
       
-      new.chain <- metro_mc(data, iter=batch.size, burn=batch.burn, proposals=chain.proposals, starting=means)
+      new.chain <- metro_mc(data, iter=batch.size, burn=batch.burn, proposals=chain.proposals, starting=means)$chain
       
       chain.accepts <- nrow(unique(new.chain[,1]))
       chain.means <- apply(new.chain, 2, mean)
@@ -175,35 +185,3 @@ auto_mc <- function(data, batch.sizes=5000, total.batches=5) {
   
   last.chain
 }
-
-my.chain <- auto_mc(data, batch.sizes = 20000, total.batches = 4)
-densplot(mcmc(my.chain))
-
-par(mfcol=c(2,2))
-apply(my.chain, 2, hist)
-
-first <- as.matrix(rbind(c(0.0001,1,0)))
-tests <- first
-
-'
-for (i in seq(5000)) {
-  h1 <- tests[i,1]
-  h2 <- tests[i,2]
-  test.prop <- function(old.params) {c(old.params[1:k] + rcauchy(k,0), 
-                                       rgamma(1,h1, h2)+10^-100)}
-  chain.i <- metro_mc(data, iter=2000, burn=100, starting = c(30, -0.1, 0, 0.01), proposals = test.prop)
-  tests[i,3] <- nrow(unique(chain.i[,1]))
-  tests <- rbind(tests, c(10^runif(1,-2,0.5), 10^runif(1,-5,3), 0))
-  print(paste0("Latest test result! (", i, ")"))
-  print(apply(chain.i,2,mean))
-  print(signif(tests[i,]),4)
-}
-tib.tests <- as_tibble(tests)
-names(tib.tests) <- c("h1", "h2", "accepts")
-
-tib.tests %>% arrange(desc(accepts)) %>% mutate("e(x)"=h1*h2, "v(x)"=h1*h2^2)
-ggplot(filter(tib.tests, accepts>10)) +
-  geom_point(mapping=aes(h1, h2, size=accepts), position = "jitter")
-
-filter(tib.tests, accepts>18) %>% arrange(desc(accepts))
-'
